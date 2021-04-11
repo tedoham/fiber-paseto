@@ -9,26 +9,27 @@ import (
 	"github.com/o1egl/paseto/v2"
 )
 
+// Errors
 var (
 	errPASETOMissing     = errors.New("missing or malformed paseto Key")
 	errPASETOUnsupported = errors.New("unsupported paseto version/purpose")
 )
 
+// Config defines the config for PASETO middleware.
 type Config struct {
 
-	// PASETOConfig defines the config for PASETO middleware.
 	// Filter defines a function to skip middleware.
+	// Optional. Default: nil
 	Filter func(*fiber.Ctx) bool
 
-	// SuccessHandler defines a function which is executed for a valid token.
+	// SuccessHandler defines a function which is executed for a valid key.
+	// Optional. Default: nil
 	SuccessHandler fiber.Handler
 
-	// ErrorHandler defines a function which is executed for an invalid token.
-	// It may be used to define a custom PASETO error.
+	// ErrorHandler defines a function which is executed for an invalid key.
+	// It may be used to define a custom error.
+	// Optional. Default: 401 Invalid or expired key
 	ErrorHandler fiber.ErrorHandler
-
-	// ErrorHandlerWithContext is almost identical to ErrorHandler, but it's passed the current context.
-	ErrorHandlerWithContext func(error, *fiber.Ctx) error
 
 	// Signing key to validate token.
 	// Required.
@@ -38,8 +39,8 @@ type Config struct {
 	// Time validation is enforced.
 	Validators []paseto.Validator
 
-	// Context key to store user information from the token into context.
-	// Optional. Default value "user".
+	// Context key to store the bearertoken from the token into context.
+	// Optional. Default: "token".
 	ContextKey string
 
 	// TokenLookup is a string in the form of "<source>:<name>" that is used
@@ -63,52 +64,42 @@ type Token struct {
 	Footer string
 }
 
+var (
+	// DefaultPASETOConfig is the default PASETO auth middleware config.
+	DefaultPASETOConfig = Config{
+		ContextKey:  "token",
+		TokenLookup: "header:" + fiber.HeaderAuthorization,
+		AuthScheme:  "Bearer",
+		Validators:  []paseto.Validator{},
+	}
+)
+
 // New ...
-func New(config ...Config) fiber.Handler {
-	// Init config
-	var cfg Config
+func New(config Config) fiber.Handler {
 
-	if len(config) > 0 {
-		cfg = config[0]
-	}
-	if cfg.SuccessHandler == nil {
-		cfg.SuccessHandler = func(c *fiber.Ctx) error {
-			return c.Next()
-		}
-	}
-	if cfg.ErrorHandler == nil {
-		cfg.ErrorHandler = func(c *fiber.Ctx, err error) error {
-			if err == errPASETOMissing {
-				return c.Status(fiber.StatusBadRequest).SendString(err.Error())
-			}
-			return c.Status(fiber.StatusUnauthorized).SendString("invalid or expired paseto")
-
-		}
-	}
-
-	if len(cfg.SigningKey) != 32 {
+	if len(config.SigningKey) != 32 {
 		panic("SigningKey must be 32 bytes length")
 	}
 
-	if cfg.TokenLookup == "" {
-		cfg.TokenLookup = "header:" + fiber.HeaderAuthorization
-
-		if cfg.AuthScheme == "" {
-			cfg.AuthScheme = "Bearer"
-		}
+	if config.ContextKey == "" {
+		config.ContextKey = DefaultPASETOConfig.ContextKey
 	}
 
-	if cfg.Validators == nil {
-		cfg.Validators = []paseto.Validator{}
+	if config.Validators == nil {
+		config.Validators = DefaultPASETOConfig.Validators
 	}
 
-	if cfg.ContextKey == "" {
-		cfg.ContextKey = "token"
+	if config.TokenLookup == "" {
+		config.TokenLookup = DefaultPASETOConfig.TokenLookup
+	}
+
+	if config.AuthScheme == "" {
+		config.AuthScheme = DefaultPASETOConfig.AuthScheme
 	}
 
 	// Initialize
-	parts := strings.Split(cfg.TokenLookup, ":")
-	extractor := pasetoFromHeader(parts[1], cfg.AuthScheme)
+	parts := strings.Split(config.TokenLookup, ":")
+	extractor := pasetoFromHeader(parts[1], config.AuthScheme)
 	switch parts[0] {
 	case "query":
 		extractor = pasetoFromQuery(parts[1])
@@ -120,55 +111,44 @@ func New(config ...Config) fiber.Handler {
 
 	// Return middleware handler
 	return func(c *fiber.Ctx) error {
-		if cfg.Filter != nil && cfg.Filter(c) {
+		if config.Filter != nil && config.Filter(c) {
 			return c.Next()
 		}
 
 		auth, err := extractor(c)
 		if err != nil {
-			if cfg.ErrorHandler != nil {
-				return cfg.ErrorHandler(c, err)
-			}
-
-			if cfg.ErrorHandlerWithContext != nil {
-				return cfg.ErrorHandlerWithContext(err, c)
+			if config.ErrorHandler != nil {
+				return config.ErrorHandler(c, err)
 			}
 			return err
 		}
 
 		// TODO: support v2.public
 		if !strings.HasPrefix(auth, "v2.local.") {
-			if cfg.ErrorHandler != nil {
-				return cfg.ErrorHandler(c, errPASETOUnsupported)
-			}
-			// Status(fiber.StatusBadRequest).SendString("Missing or malformed PASETO")
-			if cfg.ErrorHandlerWithContext != nil {
-				return cfg.ErrorHandlerWithContext(errPASETOUnsupported, c)
+			if config.ErrorHandler != nil {
+				return config.ErrorHandler(c, errPASETOUnsupported)
 			}
 			return errPASETOUnsupported
 		}
 
 		var token Token
-		err = paseto.Decrypt(auth, cfg.SigningKey, &token.JSONToken, &token.Footer)
+		err = paseto.Decrypt(auth, config.SigningKey, &token.JSONToken, &token.Footer)
 		if err == nil {
-			err = token.Validate(append(cfg.Validators, paseto.ValidAt(time.Now()))...)
+			err = token.Validate(append(config.Validators, paseto.ValidAt(time.Now()))...)
 			if err == nil {
 				// Store user information from token into context.
-				c.Locals(cfg.ContextKey, token)
-				if cfg.SuccessHandler != nil {
-					cfg.SuccessHandler(c)
+				c.Locals(config.ContextKey, token)
+				if config.SuccessHandler != nil {
+					config.SuccessHandler(c)
 				}
-				return cfg.SuccessHandler(c)
+				return c.Next()
 			}
 		}
 
-		if cfg.ErrorHandler != nil {
-			return cfg.ErrorHandler(c, err)
+		if config.ErrorHandler != nil {
+			return config.ErrorHandler(c, err)
 		}
-		if cfg.ErrorHandlerWithContext != nil {
-			return cfg.ErrorHandlerWithContext(err, c)
-		}
-		return cfg.ErrorHandler(c, err)
+		return config.ErrorHandler(c, err)
 	}
 }
 
