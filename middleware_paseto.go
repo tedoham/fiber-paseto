@@ -111,6 +111,7 @@ func New(config Config) fiber.Handler {
 
 	// Return middleware handler
 	return func(c *fiber.Ctx) error {
+		// Filter request to skip middleware
 		if config.Filter != nil && config.Filter(c) {
 			return c.Next()
 		}
@@ -152,7 +153,7 @@ func New(config Config) fiber.Handler {
 	}
 }
 
-// pasetoFromHeader returns a `pasetoExtractor` that extracts token from the request header.
+// pasetoFromHeader returns a function that extracts api key from the request header.
 func pasetoFromHeader(header string, authScheme string) func(c *fiber.Ctx) (string, error) {
 	return func(c *fiber.Ctx) (string, error) {
 		auth := c.Get(header)
@@ -167,7 +168,7 @@ func pasetoFromHeader(header string, authScheme string) func(c *fiber.Ctx) (stri
 	}
 }
 
-// pasetoFromQuery returns a `pasetoExtractor` that extracts token from the query string.
+// pasetoFromQuery returns a function that extracts api key from the query string.
 func pasetoFromQuery(param string) func(c *fiber.Ctx) (string, error) {
 	return func(c *fiber.Ctx) (string, error) {
 		token := c.Query(param)
@@ -178,7 +179,7 @@ func pasetoFromQuery(param string) func(c *fiber.Ctx) (string, error) {
 	}
 }
 
-// pasetoFromParam returns a `pasetoExtractor` that extracts token from the url param string.
+// pasetoFromParam returns a function that extracts api key from the url param string.
 func pasetoFromParam(param string) func(c *fiber.Ctx) (string, error) {
 	return func(c *fiber.Ctx) (string, error) {
 		token := c.Params(param)
@@ -189,7 +190,7 @@ func pasetoFromParam(param string) func(c *fiber.Ctx) (string, error) {
 	}
 }
 
-// pasetoFromCookie returns a `pasetoExtractor` that extracts token from the named cookie.
+// pasetoFromCookie returns a function that extracts api key from the named cookie.
 func pasetoFromCookie(name string) func(c *fiber.Ctx) (string, error) {
 	return func(c *fiber.Ctx) (string, error) {
 		token := c.Cookies(name)
